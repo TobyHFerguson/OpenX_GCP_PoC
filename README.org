@@ -1,0 +1,49 @@
+* OpenX GCP Poc
+A repo to capture what's needed to create and run a cluster in one google project accessing buckets in another (aka foreign) google project.
+
+The critical connection here is that the foreign google account has some service account that is configured to permit access, and that you have the key file. (You're also expected to have the permissions to execute Director against your own Google account, and that you have the necessary key for that account too!)
+* Instructions
+Clone this repo to your laptop.
+
+If necessary, build an image (see [[Building an image]])
+
+Setup the configuration parameters by editing the file =cluster.properties=
+
+
+Run the director server and client as docker images using the provided scripts. (In case you need to debug note the location of the log files, printed at the beginnning of the execution. The default values are =~/director-server-logs= and ~/director-client-logs=, although they can be changed by setting the SERVER_LOG_DIR and CLIENT_LOG_DIR envars)
+
+In one terminal run the director server - this will stay up and running, but can be stopped and restarted if desired.
+
+#+BEGIN_SRC sh
+scripts/director.sh
+#+END_SRC
+
+In another terminal run the director client for validation:
+#+BEGIN_SRC sh
+scripts/validate.sh openx-gcp-cluster.conf 
+...
+Configuration file passes all validation checks.
+#+END_SRC
+
+If that is successful (it will say =Configuration file passes all validation checks.=) then run the bootstrap variant:
+#+BEGIN_SRC sh
+scripts/bootstrap.sh openx-gcp-cluster.conf
+...
+...
+Cluster ready.
+#+END_SRC
+
+If that is successful (it will say =Cluster ready.=) then copy the foreign key file into the cluster workers:
+#+BEGIN_SRC 
+scripts/copy-key-to-workers.sh
+#+END_SRC
+
+* Building an image
+I used commit [[https://github.com/TobyHFerguson/director-scripts/commit/3ad123e525ff89e0204eb9df270ec3634c5530bf][3ad123e]] from my [[https://github.com/TobyHFerguson/director-scripts][TobyHFerguson/director-scripts]] repo, with the following command, to build an image (=https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/centos-7-jdk8-cm5-cdh-5-16=)
+#+BEGIN_SRC sh
+./build-image.sh -p us-central1-a centos-7 gcp-se centos-7-jdk8-cm5-cdh-5-16 http://archive.cloudera.com/cdh5/parcels/5.16/ https://archive.cloudera.com/cm5/redhat/7/x86_64/cm/5.16.1/
+#+END_SRC
+
+You will need to build your own image if you want to run the clusters in a different region or zone, or if you want to use different versions of Cloudera Manager or Cloudera Data Hub.
+
+
