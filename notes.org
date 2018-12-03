@@ -1,0 +1,450 @@
+* OpenX on GCP
+* Install Jar
+** Install jar in cluster from google download
+#+BEGIN_SRC sh
+for h in ox-worker{1..3}
+do
+    ssh $h 'curl -l -O https://storage.googleapis.com/hadoop-lib/gcs/gcs-connector-hadoop2-latest.jar; sudo mv gcs-connector-hadoop2-latest.jar /opt/cloudera/parcels/CDH/jars/; sudo ln -s /opt/cloudera/parcels/CDH/jars/gcs-connector-hadoop2-latest.jar /opt/cloudera/parcels/CDH/lib/hadoop/'
+done
+#+END_SRC
+** Install jar in cluster from build
+The jar should be in the cluster thus:
++ as a file, in /opt/cloudera/parcels/CDH/jars/
++ as a symlink /opt/cloudera/parcels/CDH/lib/hadoop/ -> /opt/cloudera/parcels/CDH/jars/
+#+BEGIN_SRC sh
+for h in ox-worker{1..3}
+do
+    scp ./bigdata-interop/gcs/target/gcs-connector-hadoop3-1.9.11-SNAPSHOT.jar ${h}:
+    ssh $h 'sudo mv gcs-connector-hadoop3-1.9.11-SNAPSHOT.jar /opt/cloudera/parcels/CDH/jars/; sudo ln -s /opt/cloudera/parcels/CDH/jars/gcs-connector-hadoop3-1.9.11-SNAPSHOT.jar /opt/cloudera/parcels/CDH/lib/hadoop/'
+done
+#+END_SRC
+
+I should also ensure that I configure authentication as per the [[https://github.com/GoogleCloudPlatform/bigdata-interop/blob/master/gcs/INSTALL.md][Installation instructions]]. I'll try to use the ~tobys-service-principal~ as the mechanism for a service account authentication and use that.
+* Create a cluster
+I created a simple cluster in the gcp-se account.
+
+I used commit [[https://github.com/TobyHFerguson/director-scripts/commit/3ad123e525ff89e0204eb9df270ec3634c5530bf][3ad123e]] from my [[https://github.com/TobyHFerguson/director-scripts][TobyHFerguson/director-scripts]] repo, with the following command, to build an image =https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/centos-7-jdk8-cm5-cdh-5-16=
+#+BEGIN_SRC sh
+./build-image.sh -p us-central1-a centos-7 gcp-se centos-7-jdk8-cm5-cdh-5-16 http://archive.cloudera.com/cdh5/parcels/5.16/ https://archive.cloudera.com/cm5/redhat/7/x86_64/cm/5.16.1/
+#+END_SRC
+* test it out
+** using gsutil
+Ensure that the machine itself has access, using the service account, to the bucket.
+#+BEGIN_SRC sh
+gsutil ls gs://toby-openx
+#+END_SRC
+I got this:
+#+BEGIN_EXAMPLE
+ServiceException: 401 Anonymous caller does not have storage.objects.list access to toby-openx.
+#+END_EXAMPLE
+So I think I need to activate the service account (according to the [[https://cloud.google.com/sdk/gcloud/reference/auth/activate-service-account][gcloud auth docs]]).
+This means I need to copy over the json key file and then use that
+#+BEGIN_SRC sh
+KP=~/.ssh/gcp-se-86d1e3427672.json
+BUCKET=~/.ssh/gcp-se-86d1e3427672.json
+for h in ox-worker{1..3}
+do
+    scp $KP $h:
+    ssh $h "gcloud auth activate-service-account --key-file=$(basename ${KP:?}); gsutil ls ${BUCKET:?}"
+done
+#+END_SRC
+Yes - that did it!
+** Using hadoop
+The [[https://github.com/GoogleCloudPlatform/bigdata-interop/blob/master/gcs/INSTALL.md#test-the-installation][docs]] suggest using something like:
+#+BEGIN_SRC sh
+hadoop fs -ls gs://toby-openx
+#+END_SRC
+I got this error:
+#+BEGIN_EXAMPLE
+18/11/28 20:03:17 WARN fs.FileSystem: Cannot load filesystem: java.util.ServiceConfigurationError: org.apache.hadoop.fs.FileSystem: Provider com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem could not be instantiated
+18/11/28 20:03:17 WARN fs.FileSystem: java.lang.NoClassDefFoundError: com/google/cloud/hadoop/gcsio/GoogleCloudStorageFileSystem
+18/11/28 20:03:17 WARN fs.FileSystem: java.lang.ClassNotFoundException: com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem
+ls: No FileSystem for scheme "gs"
+#+END_EXAMPLE
+So I have to add this key file to the core-site.xml on each machine. There must be a way to do this via CM.
+
+#+BEGIN_SRC sh
+for h in ox-worker{1..3}
+do
+    scp ~/.ssh/gcp-se-86d1e3427672.json $h:
+    ssh $h 'chmod a+r gcp-se-86d1e3427672.json; sudo mv gcp-se-86d1e3427672.json /opt/cloudera'
+done
+#+END_SRC
+I don't know what the minimal permissions are ... 
+
+Using CM I added the following into the Cluster-wide Advanced Configuration Snippet for HDFS-1:
+#+BEGIN_EXAMPLE
+<property>
+  <name>google.cloud.auth.service.account.json.keyfile</name>
+  <value>/opt/cloudera/gcp-se-86d1e3427672.json</value>
+  <description>
+    The JSON key file of the service account used for GCS
+    access when google.cloud.auth.service.account.enable is true.
+  </description>
+</property>
+#+END_EXAMPLE
+This will be inserted using something like this:
+#+BEGIN_EXAMPLE
+cluster {
+  configs {
+    HDFS {
+      core_site_safety_valve: """
+          <property>
+              <name>fs.s3a.access.key</name>
+              <value>"""${AWS_ACCESS_KEY_ID}"""</value>
+          </property>
+          <property>
+              <name>fs.s3a.secret.key</name>
+              <value>"""${AWS_SECRET_ACCESS_KEY}"""</value>
+          </property>
+          <property>
+              <name>fs.s3a.block.size</name>
+              <value>134217728</value>
+          </property>
+          <property>
+            <name>fs.s3a.server-side-encryption-algorithm</name>
+            <value>AES256</value>
+          </property>
+          <property>
+            <name>fs.s3a.connection.ssl.enabled</name>
+            <value>true</value>
+            <description>Enables or disables SSL connections to S3.</description>
+          </property>
+      """
+    }
+  }
+}
+#+END_EXAMPLE
+only with the relevant bits changed.
+
+I then restarted the hdfs service and tried again:
+#+BEGIN_EXAMPLE
+hadoop fs -ls gs://toby-openx
+18/11/28 20:21:58 WARN fs.FileSystem: Cannot load filesystem: java.util.ServiceConfigurationError: org.apache.hadoop.fs.FileSystem: Provider com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem could not be instantiated
+18/11/28 20:21:58 WARN fs.FileSystem: java.lang.NoClassDefFoundError: com/google/cloud/hadoop/gcsio/GoogleCloudStorageFileSystem
+18/11/28 20:21:58 WARN fs.FileSystem: java.lang.ClassNotFoundException: com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem
+ls: No FileSystem for scheme "gs"
+#+END_EXAMPLE
+After digging around I found that the =core-site.xml= referenced the keyfile, but that the keyfile wasn't present on any of the machines. I therefore distributed the keyfile thus:
+#+BEGIN_SRC sh
+for h in ox-worker{1..3}
+do
+    scp  ~/.ssh/gcp-se-86d1e3427672.json $h:
+    ssh $h 'chmod 600 gcp-se-86d1e3427672.json; sudo chown cloudera-scm:cloudera-scm gcp-se-86d1e3427672.json; sudo mv gcp-se-86d1e3427672.json /opt/cloudera'
+done
+#+END_SRC
+This is still not working. I get the =ls: No FileSystem for scheme "gs"= error. Turned out that the jar file didn't have the class in it, and that I'm using the wrong version of CDH. I need to use 5.16.
+
+However I then discovered that its the shaded jars that have this filesystem. 
+
+Given that the OpenX PoC is going to use CDH 5.16 I'm going to move to that release and test there.
+* Creating ssh_config
+I labeled each machine with its role (worker, master, gwy,cm) and then used the following command to get the ip addresses and roles (use ~gcloud compute instances list --format=flattened~ to get the list of attributes)
+#+BEGIN_SRC sh
+gcloud compute instances list --filter="name~^thf.*" --format='[table](labels.role,networkInterfaces[0].accessConfigs[0].natIP:sort=1)' | grep -v NAT >ssh_config
+#+END_SRC
+I then hand-edited ssh_config to give me something like this:
+#+BEGIN_EXAMPLE
+Host  ox-master  
+     Hostname 35.192.126.91
+Host  ox-worker1
+     Hostname 35.192.214.5
+Host  ox-worker2
+     Hostname 35.225.251.184
+Host  ox-gwy
+     Hostname 35.232.69.24
+Host  ox-worker3
+     Hostname 35.238.164.164
+Host  ox-cm
+     Hostname 35.238.248.177
+
+
+Match originalhost=ox-*
+    StrictHostKeyChecking no
+    CheckHostIP no
+    User toby
+    IdentityFile ~/.ssh/gcp_toby_personal
+#+END_EXAMPLE
+And then used ~include ~/Development/OpenX/GCP_Poc/ssh_config~ to add it to my =~/.ssh/config= file
+
+* Downgrade to 5.15
++ Configure Director for CDH 5.16
++ Create a 5.16 cluster
++ Download CDH 2.0 jar from https://cloud.google.com/dataproc/docs/concepts/connectors/install-storage-connector
++ Distribute jar and keyfile
++ Configure =core-site.xml=
++ test
+* Issues using a new packer image
+I tried creating a new packer image using the following:
+#+BEGIN_SRC sh
+./build-image.sh -p us-central1-a centos-7 gcp-se centos-7-jdk8-cm5-cdh-5-16 http://archive.cloudera.com/cdh5/parcels/5.16/ https://archive.cloudera.com/cm5/redhat/7/x86_64/cm/5.16.1/
+#+END_SRC
+This resulted in the image =https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/centos-7-jdk8-cm5-cdh-5-16=
+
+When I attempted to use that image the director UI would throw a parcel validation exception when trying to build the cluster. I couldn't see any parcels when I went to the CM instance UI, although they did exist in =/opt/cloudera/parcels/CDH-5.16.1-1.cdh5.16.1.p0.3=. 
+** Root Cause
+Turns out that I have to provide the CDH 5 parcel URL (https://archive.cloudera.com/cdh5/parcels/5/).
+** Notes
+I tried building the cluster with 5.16 and 5 as the options. Both times it failed.
+
+To try to get around this I'm going to use the Director 6 image with a conf file, and use the URLs for that conf file there. In particular I'm using the following settings:
+
+| key                | value                                                                                                  |
+|--------------------+--------------------------------------------------------------------------------------------------------|
+| master.image       | https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/n1-standard-4-centos7-jdk1-8-cdhm6 |
+| worker.image       | https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/n1-standard-4-centos7-jdk1-8-cdhm6 |
+| parcelRepositories | https://archive.cloudera.com/cdh5/parcels/5/                                                           |
+| products           | CDH="5"                                                                                                |
+|                    |                                                                                                        |
+
+The cluster seems to be building, and the CDH-5.16.1 parcels distributed. So it looks as if this is a valid configuration and maybe there's something wrong with the image build. 
+
+For the time being I'll ignore the image build problem and come back to that once I've figured out the configuration for gcs storage and keys. 
+
+I tried using the following setup:
+| key                | value                                                                                                  |
+|--------------------+--------------------------------------------------------------------------------------------------------|
+| master.image       | https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/n1-standard-4-centos7-jdk1-8-cdhm6 |
+| worker.image       | https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/centos-7-jdk8-cm5-cdh-5-16         |
+| parcelRepositories | https://archive.cloudera.com/cdh5/parcels/5/                                                           |
+| products           | CDH="5"                                                                                                |
+
+This failed at FirstRun with a message indicating that HUE failed to start. When I reviewed my build I'd used the '-6' flag, so I think that was the issue. 
+
+I'm going to rebuild that image without the -6 flag and try again. This will be cluster cdh5-5-16.
+
+This failed again, with the same issue - basically the FirstRun failed to start up Hue. I'll have to investigate that a bit more deeply. Reading the [[https://github.com/TobyHFerguson/director-scripts/blob/gcp_2/c6/README.md][Hue-6 bootstrap script README]] makes me believe I have a package dependency issue. The readme at times equates CDH and CM 6, and other times seems to indicate that its only CDH 6 that matters. I suspect that what I'm trying (CM 6 with CDH 5) is the underlying problem. 
+
+One resolution is to try building a cluster with the [[https://github.com/TobyHFerguson/director-scripts/blob/gcp_2/c6/hue-c6.sh][huc-c6.sh]] bootstrap script. I'll try that. This cluster will be cdh5-5-16-hue-6
+
+Failed again.
+
+I'll try again, this time using the same =cm5-cdh-5-16= image for both CM and CDH. Turns out I have a CDH with the necessary image, so I'll build properly using the correct repository override. This worked successfully. So I know that my =cm5-cdh-5-16= works OK.
+
+In the UI I tried using the CDH6 deployment but with the =cdhm6= image, and just specifying the CDH release as 5, without providing an alternative parcel repository (https://archive.cloudera.com/cdh5/parcels/5/). That failed immediately. So I think that the root cause of the earlier failure was that although the image had the necessary parcels I had to provide the repository URL as well. This is cluster cdh-5-16-3.
+
+This worked successfully, so that I know that I can use the =cdhm6= image; I just need to ensure that the appropriate parcel repository is used when I deploy that image (this is an issue when using CDH 5-15).
+
+* Accessing storage in another project
+** Summary
++ Create a service principal
++ Create a bucket
++ Assign the service principal access to the bucket with the =Storage Legacy Bucket Owner= role
++ Download the service principal key
++ Set the service principal key when accessing the bucket
+** Notes
+
+I want to be able to access storage in some other project. I'll setup gcs in my personal google account and see if I can configure the cluster to access that. 
+
+The google project is [[https://console.cloud.google.com/compute/instances?project=tobys-project-1469812262935&authuser=1][tobys-project]]
+
+I'll create a service-principal: =cloudera-cluster= and grant it access. The key is:
+#+BEGIN_EXAMPLE
+{
+  "type": "service_account",
+  "project_id": "tobys-project-1469812262935",
+  "private_key_id": "1efbf56186f681ba3e020ff0a304cc3be9acad12",
+  "private_key": "-----BEGIN PRIVATE KEY-----\n***REMOVED******REMOVED***==\n-----END PRIVATE KEY-----\n",
+  "client_email": "cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com",
+  "client_id": "110919417985649671704",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/cloudera-cluster%40tobys-project-1469812262935.iam.gserviceaccount.com"
+}
+
+#+END_EXAMPLE
+
+I'll create storage =gs://openx-at-toby/foo=
+
+I'll use the above key to try to access this folder.
++ copy the file to the machine 
++ authenticate the service
++ list the contents using gsutils
+
+#+BEGIN_EXAMPLE
+gcloud auth activate-service-account --key-file=/Users/toby/Downloads/tobys-project-1469812262935-1efbf56186f6.json
+gsutils ls gs://openx-at-toby
+#+END_EXAMPLE
+
+That works.
+
+I'll replace the keys in the cluster with this one and try to access that storage.
+
+No - that didn't work! I don't yet understand it. Here're the results:
+| json.keyfile                                                | project       | gcs access |
+|-------------------------------------------------------------+---------------+------------|
+| /opt/cloudera/gcp-se-86d1e3427672.json                      | gcp-se        | yes        |
+| /opt/cloudera/tobys-project-1469812262935-1efbf56186f6.json | tobys-project | no         |
+
+So we know we have the classpath and jar file correctly situated. This is a permissions issue.
+
+We know that activating the service account for each key will give us access to the storage, so the keys are valid and the bucket permissions are sufficient for the operation (ls). 
+
+We know that we can't activate the gcp-se account and read the tobys-project bucket, and vice versa.
+
+We have the key files on all worker nodes, and that's all that's needed, because thats the only place the gcp-se key is and that one works.
+#+BEGIN_EXAMPLE
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gcloud auth activate-service-account --key-file=/opt/cloudera/gcp-se-86d1e3427672.json
+Activated service account credentials for: [tobys-service-account@gcp-se.iam.gserviceaccount.com]
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gsutil ls gs://toby-openx
+gs://toby-openx/foo/
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gsutil ls gs://openx-at-toby
+AccessDeniedException: 403 tobys-service-account@gcp-se.iam.gserviceaccount.com does not have storage.objects.list access to openx-at-toby.
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gcloud auth activate-service-account --key-file=tobys-project-1469812262935-1efbf56186f6.json
+Activated service account credentials for: [cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com]
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gsutil ls gs://toby-openx
+AccessDeniedException: 403 cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com does not have storage.objects.list access to toby-openx.
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ gsutil ls gs://openx-at-toby
+gs://openx-at-toby/foo/
+#+END_EXAMPLE
+
+Hadoop seems to pick up the pieces (its not complaining about anything missing), but then the ls command just fails. The difference is simply that when one uses the gcp-se keyfile its possible to access the gcp-se storage via hadoop; when one uses the tobys-project keyfile one cannot access the tobys-project storage via hadoop. 
+
+The error message is simply this:
+#+BEGIN_EXAMPLE
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ hadoop fs -ls !$
+hadoop fs -ls gs://openx-at-toby
+Nov 30, 2018 5:29:47 AM com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystemBase configure
+WARNING: No working directory configured, using default: 'gs://openx-at-toby/'
+ls: Error accessing: bucket: openx-at-toby
+#+END_EXAMPLE
+
+A successful example with gcp-se key etc. looks like this:
+#+BEGIN_EXAMPLE
+[toby@thf5-0a5cf247-d00c-4647-b6a9-748b3ec8d9c5 ~]$ hadoop fs -ls gs://toby-openx/
+Nov 30, 2018 5:09:26 AM com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystemBase configure
+WARNING: No working directory configured, using default: 'gs://toby-openx/'
+Found 1 items
+drwx------   - toby toby          0 2018-11-29 22:07 gs://toby-openx/foo
+#+END_EXAMPLE
+
+In the end this turned out to be a role/permission problem on the buckets. 
+
+| project       | bucket        | role/permissions            | hadoop access |
+|---------------+---------------+-----------------------------+---------------|
+| gcp-se        | toby-openx    | Storage Legacy Bucket Owner | yes           |
+| tobys-project | openx-at-toby | Storage Object Creator      | No            |
+|               |               | Storage Object Viewer       | No            |
+|---------------+---------------+-----------------------------+---------------|
+| tobys-project | openx-at-toby | Storage Legacy Bucket Owner | Yes           |
+|               |               | Storage Object Creator      |               |
+|               |               | Storage Object Viewer       |               |
+
+I want to figure out:
++ Can I remove the =Storage Object {Creator|Viewer}= roles (they're inherited and were set as part of the =cloudera-cluster= service account
+* Implementation
+I can think of a few different implementations of making GCS accessible:
++ Manually :: Delay everything until after the cluster has been built, and then run scripts on the appropriate machines, scp the key over, and set
++ bootstrap :: Use a bootstrap script to install the jar files, key file, configure the CM properties
++ image :: Put the jar files into the base image (key file too?), and then use bootstrap to configure the CM properties
+
+From a security perspective I really don't like two aspects of what I've seen so far:
++ public key :: the service account key is on the workers, and is exposed. I haven't yet been able to figure out a differen way of doing it, although this article [[https://cloud.google.com/iam/docs/faq#how_do_i_grant_permissions_to_resources_in_my_project_to_someone_who_is_not_a_member_of_my_organization][How do I grant permissions to resources in my project to someone who is not a member of my organization?]] looks promising. I don't know if this applies to service accounts though.
++ bucket permissions :: I haven't figured out the minimum set of bucket permissions needed. 
+
+For my initial release I'll do the following:
++ Use a custom image that is setup for CM6 and CDH5.16
++ Use bootstrap scripts to:
+  1. inject the GCS jars into the workers
+  2. configure CM to reference the service account keyfile at =/opt/cloudera/gcs-sa.json
++ Use an external script to actually copy the keyfile to =/opt/cloudera/= and link it in to =/opt/cloudera/gcs-sa.json=
+* Ideas
++ Use a docker container to provide proxy services from the laptop
++ Create documentation so that this system can be easily reproduced on anyone else's laptop
+* Archive
+** Create an image with the GCS Storage Connector
+*** Create the GCS Storage Connector Jar
+The GCS Storage Connector Jar is found in the [[https://github.com/GoogleCloudPlatform/bigdata-interop][bigdata-interop/gcs]] repo. I've built the jar in to file:./bigdata-interop/gcs/target thus:
+#+BEGIN_SRC sh
+cd bigdata-interop
+mvn -P hadoop3 package -DskipTests
+#+END_SRC
+The jar is ./bigdata-interop/gcs/target/gcs-connector-hadoop3-1.9.11-SNAPSHOT.jar
+** Modifying a Google Service Accounts roles
+In =tobys-project= I've granted the =cloudera-cluster= service account two roles: =Storage Object Creator= and =Storage Object Viewer=. I did this at the time I created the service account. I've since learned that I didn't need to do this; I can simply add these roles to this service account at the resource level (i.e. on the bucket). So I want to modify the service account.
+
+The UI doesn't let me remove roles directly, so I'm going to try to edit the policy 'by hand', as per the [[https://cloud.google.com/iam/docs/granting-roles-to-service-accounts#granting_access_to_a_service_account_for_a_resource][Granting Roles to Service Accounts]] docs. 
+
+#+BEGIN_EXAMPLE
+gcloud iam service-accounts get-iam-policy cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com
+API [iam.googleapis.com] not enabled on project [935008526857]. Would 
+you like to enable and retry (this will take a few minutes)? (y/N)?  y
+
+ERROR: (gcloud.iam.service-accounts.get-iam-policy) PERMISSION_DENIED: Service Management API has not been used in project 935008526857 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/servicemanagement.googleapis.com/overview?project=935008526857 then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.
+- '@type': type.googleapis.com/google.rpc.Help
+  links:
+  - description: Google developers console API activation
+    url: https://console.developers.google.com/apis/api/servicemanagement.googleapis.com/overview?project=935008526857
+#+END_EXAMPLE
+
+This was because my gcloud project was still gcp-se - I needed to login to gcloud and change projects:
+
+#+BEGIN_EXAMPLE
+bash-4.4$ gcloud auth login
+Your browser has been opened to visit:
+
+    https://accounts.google.com/o/oauth2/auth?redirect_uri=http%3A%2F%2Flocalhost%3A8085%2F&prompt=select_account&response_type=code&client_id=32555940559.apps.googleusercontent.com&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fappengine.admin+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcompute+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Faccounts.reauth&access_type=offline
+
+
+WARNING: `gcloud auth login` no longer writes application default credentials.
+If you need to use ADC, see:
+  gcloud auth application-default --help
+
+You are now logged in as [toby.h.ferguson@gmail.com].
+Your current project is [gcp-se].  You can change this setting by running:
+  $ gcloud config set project PROJECT_ID
+bash-4.4$ gcloud config set project tobys-project-1469812262935
+
+Updated property [core/project].
+#+END_EXAMPLE
+
+I then ran a command to get the policy:
+#+BEGIN_EXAMPLE
+bash-4.4$ bash-4.4$ gcloud iam service-accounts get-iam-policy cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com
+etag: ACAB
+#+END_EXAMPLE
+So this means that there is no policy on the service account itself. What I don't understand is what the roles are that are associated with the policy. 
+
+So far I've been unable to determine how to modify the =cloudera-cluster= service account's original roles.
+
+I'm going to drop this line of pursuit and try doing this a different way.
+** Docker implementation for director
+I need to modify the docker implementation for director a little to account for its authentication mechanism. In particular I assume that the Google application_default_credentials.json file is world readable, and I mount it and setup the =GOOGLE_APPLICATION_CREDENTIALS= envar so that director can call the necessary GCP APIs:
+
+The docker command is:
+#+BEGIN_SRC sh
+director_gcp() {
+    docker run \
+	   --rm \
+	   -v ${HOME}/director-server-logs:/home/director/logs \
+	   -v ${PWD}:/home/director/gcloud \
+	   -e GOOGLE_APPLICATION_CREDENTIALS=/home/director/gcloud/application_default_credentials.json \
+	   --name director \
+	   --network director-network \
+	   -p 2345:7189 \
+	   tobyhferguson/cloudera-director:server_latest
+}
+#+END_SRC
+
+But this shouldn't be. What's happening is that I'm seeing this in the director server log:
+#+BEGIN_EXAMPLE
+c.c.l.a.common.UnknownPropertyFilter: Filtered unknown config keys from environment 'ox': [jsonKey.type, jsonKey.client_email, jsonKey.client_id, jsonKey.auth_provider_x509_cert_url, jsonKey.auth_uri, jsonKey.project_id, jsonKey.private_key, jsonKey.private_key_id, jsonKey.client_x509_cert_url, jsonKey.token_uri]
+[2018-12-01 01:49:26.270 +0000] INFO  [qtp1897221921-17] 5e7a2925-f1da-4f71-9cf0-db9793981522 POST /api/d6.0/environments - - c.c.l.p.c.PluggableComputeEnvironmentValidator: Validating environment for compute provider: google
+[2018-12-01 01:49:26.556 +0000] WARN  [qtp1897221921-17] 5e7a2925-f1da-4f71-9cf0-db9793981522 POST /api/d6.0/environments - - c.c.l.p.c.PluggableCloudProviderFactory: Exception creating cloud provider during validation
+java.lang.RuntimeException: java.io.IOException: Error reading credential file from environment variable GOOGLE_APPLICATION_CREDENTIALS, value '/home/director/gcloud/application_default_credentials.json': File does not exist.
+#+END_EXAMPLE
+For some reason director is failing to pick up the relevant keys.
+
+I tested this out by commenting out the jsonkey and just using the =GOOGLE_APPLICATION_CREDENTIALS=. The system worked correctly and produced a valid deployment.
+
+I could also do with cleaning up the output of director so that it didn't just go to stdout.
+
+I could also do with making it so that it asked whether to clean up the logs before starting ...
+
+An issue I want to work on is how to 'break into' a docker image if its only got an ENTRYPOINT. How does one attach and get a shell under those circumstances?
+#+BEGIN_SRC 
+docker exec -it NAME_OF_CONTAINER /bin/bash
+#+END_SRC
+
+
