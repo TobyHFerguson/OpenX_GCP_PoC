@@ -5,12 +5,16 @@ The critical connection here is that the foreign google account has some service
 * Instructions
 Clone this repo to your laptop.
 
-If necessary, build an image (see [[Building an image]])
+If necessary (you want to us, build an image (see [[Building an image]])
 
 Setup the configuration parameters by editing the file =cluster.properties=
 
-
 Run the director server and client as docker images using the provided scripts. (In case you need to debug note the location of the log files, printed at the beginnning of the execution. The default values are =~/director-server-logs= and ~/director-client-logs=, although they can be changed by setting the SERVER_LOG_DIR and CLIENT_LOG_DIR envars)
+
+If this is your first time using this docker mechanism you'll have to create a docker network for the director components:
+#+BEGIN_SRC sh
+docker network create director-network
+#+END_SRC
 
 In one terminal run the director server - this will stay up and running, but can be stopped and restarted if desired.
 
