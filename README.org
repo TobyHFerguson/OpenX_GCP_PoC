@@ -42,6 +42,10 @@ If that is successful (it will say =Cluster ready.=) then copy the foreign key f
 scripts/copy-key-to-workers.sh
 #+END_SRC
 
+Finally, test it by ssh'ing into a worker and executing the following (where BUCKET is the name of a bucket in the /foreign/ GCP project):
+#+BEGIN_SRC 
+hadoop fs -ls gs://BUCKET
+#+END_SRC
 * Building an image
 I used commit [[https://github.com/TobyHFerguson/director-scripts/commit/3ad123e525ff89e0204eb9df270ec3634c5530bf][3ad123e]] from my [[https://github.com/TobyHFerguson/director-scripts][TobyHFerguson/director-scripts]] repo, with the following command, to build an image (=https://www.googleapis.com/compute/v1/projects/gcp-se/global/images/centos-7-jdk8-cm5-cdh-5-16=)
 #+BEGIN_SRC sh
