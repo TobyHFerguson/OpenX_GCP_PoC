@@ -244,7 +244,7 @@ I'll create a service-principal: =cloudera-cluster= and grant it access. The key
   "type": "service_account",
   "project_id": "tobys-project-1469812262935",
   "private_key_id": "1efbf56186f681ba3e020ff0a304cc3be9acad12",
-  "private_key": "-----BEGIN PRIVATE KEY-----\n***REMOVED***XR0jzxEu7QrLtNCrU\nwhtEt4YyccV7S61takpz2jjUKpaRXPLYmxELHNiDYDQHEUA99Gs/\nK1Yujrw9Btz//H47aPmhyf3hK3HDdZDRX8y4gEtqdJVS2n2brD78F9r8Q4Q/Iz1D\nUM+WS/r7rCvKdzuCY750GwRK1AOhjs6sHcApQknsVPyA664+EkVvIj/2xYgnsT5M\nIro2gN1VABCCVSSu+/LBkw==\n-----END PRIVATE KEY-----\n",
+  "private_key": **REMOVED**,
   "client_email": "cloudera-cluster@tobys-project-1469812262935.iam.gserviceaccount.com",
   "client_id": "110919417985649671704",
   "auth_uri": "https://accounts.google.com/o/oauth2/auth",
