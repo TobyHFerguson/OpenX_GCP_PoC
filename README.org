@@ -19,19 +19,19 @@ docker network create director-network
 In one terminal run the director server - this will stay up and running, but can be stopped and restarted if desired. The UI will be available on http://localhost:7189 (assuming that port is free!)
 
 #+BEGIN_SRC sh
-scripts/director.sh
+bin/director.sh
 #+END_SRC
 
 In another terminal run the director client for validation:
 #+BEGIN_SRC sh
-scripts/validate.sh openx-gcp-cluster.conf 
+bin/validate.sh openx-gcp-cluster.conf 
 ...
 Configuration file passes all validation checks.
 #+END_SRC
 
 If that is successful (it will say =Configuration file passes all validation checks.=) then run the bootstrap variant:
 #+BEGIN_SRC sh
-scripts/bootstrap.sh openx-gcp-cluster.conf
+bin/bootstrap.sh openx-gcp-cluster.conf
 ...
 ...
 Cluster ready.
@@ -39,7 +39,7 @@ Cluster ready.
 
 If that is successful (it will say =Cluster ready.=) then copy the foreign key file into the cluster workers:
 #+BEGIN_SRC 
-scripts/copy-key-to-workers.sh
+bin/copy-key-to-workers.sh
 #+END_SRC
 
 Finally, test it by ssh'ing into a worker and executing the following (where BUCKET is the name of a bucket in the /foreign/ GCP project):
