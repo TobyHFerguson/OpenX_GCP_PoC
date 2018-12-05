@@ -349,6 +349,34 @@ For my initial release I'll do the following:
   1. inject the GCS jars into the workers
   2. configure CM to reference the service account keyfile at =/opt/cloudera/gcs-sa.json
 + Use an external script to actually copy the keyfile to =/opt/cloudera/= and link it in to =/opt/cloudera/gcs-sa.json=
+* Adam Smeizny's GCP work
+[[https://cloud.google.com/blog/products/storage-data-transfer/how-to-connect-clouderas-cdh-to-cloud-storage?_lrsc=533401a9-932a-4e29-8fd5-ed49b8ca0596&utm_source=linkedin&utm_medium=social&utm_content=elevate&utm_campaign=2017-17q3-gc-cc-abm-googlecloud-unpaidsocial-linkedin-leadgen-elevate][How to Connect CDH to GCP Storage]]
+
+** Hive
+#+BEGIN_EXAMPLE
+beeline
+Beeline version 1.1.0-cdh5.16.1 by Apache Hive
+beeline> !connect jdbc:hive2://10.240.0.42:10000/default
+scan complete in 3ms
+Connecting to jdbc:hive2://10.240.0.42:10000/default
+Enter username for jdbc:hive2://10.240.0.42:10000/default: 
+Enter password for 
+Enter password for jdbc:hive2://10.240.0.42:10000/default: Connected to: Apache Hive (version 1.1.0-cdh5.16.1)
+Driver: Hive JDBC (version 1.1.0-cdh5.16.1)
+Transaction isolation: TRANSACTION_REPEATABLE_READ
+0: jdbc:hive2://10.240.0.42:10000/default> create table test1 (title string) location 'gs://openx-at-toby/gcsconnector/test1/';
+
+INFO  : Compiling command(queryId=hive_20181205191717_887eb5bd-aabd-4e43-b1e6-b8eb11a9a2b5): create table test1 (title string) location 'gs://openx-at-toby/gcsconnector/test1/'
+INFO  : Semantic Analysis Completed
+INFO  : Returning Hive schema: Schema(fieldSchemas:null, properties:null)
+INFO  : Completed compiling command(queryId=hive_20181205191717_887eb5bd-aabd-4e43-b1e6-b8eb11a9a2b5); Time taken: 0.545 seconds
+INFO  : Executing command(queryId=hive_20181205191717_887eb5bd-aabd-4e43-b1e6-b8eb11a9a2b5): create table test1 (title string) location 'gs://openx-at-toby/gcsconnector/test1/'
+INFO  : Starting task [Stage-0:DDL] in serial mode
+ERROR : FAILED: Execution Error, return code 1 from org.apache.hadoop.hive.ql.exec.DDLTask. MetaException(message:Got exception: java.io.IOException No FileSystem for scheme: gs)
+INFO  : Completed executing command(queryId=hive_20181205191717_887eb5bd-aabd-4e43-b1e6-b8eb11a9a2b5); Time taken: 0.119 seconds
+Error: Error while processing statement: FAILED: Execution Error, return code 1 from org.apache.hadoop.hive.ql.exec.DDLTask. MetaException(message:Got exception: java.io.IOException No FileSystem for scheme: gs) (state=08S01,code=1)
+0: jdbc:hive2://10.240.0.42:10000/default> 0: jdbc:hive2://10.240.0.42:10000/default> 
+#+END_EXAMPLE
 * Ideas
 + Use a docker container to provide proxy services from the laptop
 + Create documentation so that this system can be easily reproduced on anyone else's laptop
