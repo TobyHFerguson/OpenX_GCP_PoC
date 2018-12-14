@@ -5,9 +5,11 @@ The critical connection here is that the foreign google account has some service
 * Instructions
 Clone this repo to your laptop.
 
-If necessary (you want to us, build an image (see [[Building an image]])
+If necessary (you want to have the image deploy quickly) build an image (see [[Building an image]])
 
 Setup the configuration parameters by editing the file =cluster.properties=
+
+The scripts assume that [[https://stedolan.github.io/jq/][jq]] is installed and on your path. Download and install if necessary.
 
 Run the director server and client as docker images using the provided scripts. (In case you need to debug note the location of the log files, printed at the beginnning of the execution. The default values are =~/director-server-logs= and ~/director-client-logs=, although they can be changed by setting the SERVER_LOG_DIR and CLIENT_LOG_DIR envars)
 
@@ -39,10 +41,12 @@ Cluster ready.
 
 If that is successful (it will say =Cluster ready.=) then copy the foreign key file into the cluster workers:
 #+BEGIN_SRC 
-scripts/copy-key-to-workers.sh
+scripts/copy-key-to-workers.sh <path to foreign key>
 #+END_SRC
 
-Finally, test it by ssh'ing into a worker and executing the following (where BUCKET is the name of a bucket in the /foreign/ GCP project):
+You can get the contents for an [[https://linux.die.net/man/5/ssh_config][ssh config file]] by executing =scripts/make-ssh-config.sh=
+
+Finally, test the deployment by ssh'ing into a worker and executing the following (where BUCKET is the name of a bucket in the /foreign/ GCP project):
 #+BEGIN_SRC 
 hadoop fs -ls gs://BUCKET
 #+END_SRC
@@ -53,5 +57,5 @@ I used commit [[https://github.com/TobyHFerguson/director-scripts/commit/3ad123e
 #+END_SRC
 
 You will need to build your own image if you want to run the clusters in a different region or zone, or if you want to use different versions of Cloudera Manager or Cloudera Data Hub.
-
-
+* Security
+I *much* prefer NOT to put my local gcp key into the =conf= file; that way I don't accidentally check my key into github or anything stupid like that! If you assign a value to the variable =GOOGLE_APPLICATION_CREDENTIALS= in =cluster.properties= then the =scripts/director.sh= will properly use that key.
